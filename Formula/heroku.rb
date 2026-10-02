@@ -4,7 +4,7 @@ class Heroku < Formula
   desc "Manage Heroku apps with dentarg's local fixes"
   homepage "https://github.com/dentarg/heroku-cli"
   url "https://github.com/dentarg/homebrew-tap/releases/download/v11.11.0-1/heroku-11.11.0.tgz"
-  sha256 "4f387ba9f81f580a0217d0ef5252970c5668d5a0036aa03e70ea4094e0c5b4ba"
+  sha256 "3aef013ac241988b04c27241f9de447c1ad73a7cd3ad92dd9f1eec1f233ef4db"
   license "ISC"
   revision 1
 
