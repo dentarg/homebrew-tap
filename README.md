@@ -45,61 +45,58 @@ brew update
 brew upgrade dentarg/tap/heroku
 ```
 
-## Prepare a release
-
-Requirements: Git, tar, Node.js 22 or newer, and npm. To publish, install the
-GitHub CLI (`gh`) and authenticate to GitHub.
-
-Commit the desired CLI changes on `local-fixes`, then run from this tap:
-
-```sh
-node scripts/prepare-release.mjs /repos/src/heroku-cli 1
-```
-
-The final argument is the tap revision. Use `1` for the first build of an
-upstream version, then `2`, `3`, and so on for additional local fixes. When the
-upstream version increases, start again at `1`. Homebrew uses the upstream
-version and formula revision to detect upgrades, even when `heroku --version`
-still prints the same upstream version.
-
-The script builds committed `HEAD` in a temporary directory using `npm ci`,
-leaves the CLI checkout alone, and writes:
-
-- `Formula/heroku.rb`: release URL, checksum, version, and revision.
-- `releases/v11.11.0-1/heroku-11.11.0.tgz`: compiled npm package.
-- `SHA256SUMS`, `release.json`, and `notes.md` in the same release directory.
-
-The `releases/` directory is ignored by Git. Upload these files as GitHub release
-assets; do not add them to the tap's Git history. The script refuses to replace
-an existing local release directory. Never replace a published archive or reuse
-its tag: publish a new revision instead.
-
-Edit `scripts/heroku.rb.template` to change the formula, then prepare a new
-release to regenerate `Formula/heroku.rb`.
-
-## Publish the first release
+## Publish with GitHub Actions
 
 Create the public repository `dentarg/homebrew-tap` on GitHub without an initial
 README, license, or Gitignore. This directory is already initialized with a
-`main` branch, an initial commit, and the appropriate `origin` remote.
+`main` branch and the appropriate `origin` remote. Commit changes and push:
 
 ```sh
 git push -u origin main
-
-gh release create v11.11.0-1 \
-  releases/v11.11.0-1/heroku-11.11.0.tgz \
-  releases/v11.11.0-1/SHA256SUMS \
-  releases/v11.11.0-1/release.json \
-  --repo dentarg/homebrew-tap \
-  --target main \
-  --title "Heroku 11.11.0, dentarg revision 1" \
-  --notes-file releases/v11.11.0-1/notes.md
-
-brew install dentarg/tap/heroku
-brew test dentarg/tap/heroku
 ```
 
-The formula's download URL becomes usable once the release is published.
+Push the CLI's `local-fixes` branch to `dentarg/heroku-cli` as well. The CLI
+repository must be public for the workflow's default cross-repository checkout.
+Keep the tap public so Homebrew can download releases without authentication.
+Enable GitHub Actions in the tap. The publishing job requests
+`contents: write` on its built-in `GITHUB_TOKEN`; repository rules must allow it
+to push release tags and update `main`. No personal access token is needed.
+
+Open **Actions → Release Heroku → Run workflow** on the tap's `main` branch.
+Leave `source_ref` as `local-fixes`, or enter a specific CLI commit or tag.
+You can also dispatch it with the GitHub CLI:
+
+```sh
+gh workflow run release.yml --repo dentarg/homebrew-tap --ref main \
+  -f source_ref=local-fixes
+```
+
+The workflow automatically:
+
+1. Checks out the requested CLI snapshot and selects the next unused tap
+   revision for its upstream version.
+2. Builds with `npm ci`, packages the compiled CLI and dependency lock, and
+   generates the formula and checksum.
+3. Installs the exact archive with Homebrew on macOS and Linux, then runs the
+   formula's functional test, strict audit, and style checks.
+4. Commits the formula, pushes an immutable release tag, and uploads the archive,
+   checksum, and source metadata to a GitHub release.
+5. Publishes the release before pushing the formula to `main`, so the download
+   is available when users see the update.
+
+Release runs are serialized. Builds and tests have read-only repository access;
+only the publishing job can write. Existing tags and draft releases reserve
+their revision, so a new workflow run never replaces their assets. If publication
+fails after creating a tag or draft, start a new run to use the next revision.
+Do not rerun just the failed publishing job after it has pushed a tag.
+
+The first release of CLI `11.11.0` is `v11.11.0-1`, followed by `v11.11.0-2`,
+and so on. A new upstream version starts at revision `1`. Homebrew detects these
+upgrades even when `heroku --version` still prints the same upstream version.
+
+The workflow runs only when dispatched; pushing or rebasing `local-fixes` alone
+does not publish a release. The prepared local archive is not uploaded by the
+workflow: Actions builds its own archive from the selected committed source.
 
 ## Rebase and publish subsequent fixes
 
@@ -111,28 +108,45 @@ git switch local-fixes
 git rebase upstream/main
 ```
 
-Resolve any conflicts and run the CLI's relevant tests before packaging. If you
-publish the rebased source branch, use `git push --force-with-lease origin
-local-fixes`; never rewrite the tap's published release tags.
+Resolve any conflicts and run the CLI's relevant tests, then publish the rebased
+branch with `git push --force-with-lease origin local-fixes`. Dispatch **Release
+Heroku** again. Other computers can then run
+`brew update && brew upgrade dentarg/tap/heroku`. Never rewrite the tap's
+published release tags.
 
-Run `prepare-release.mjs` with the next revision, review and commit the generated
-formula, and push the tap's `main`. Create a new GitHub release using the commands
-above with the new version and revision. Other computers can then run
-`brew update && brew upgrade dentarg/tap/heroku`.
+## Prepare a release locally
+
+Requirements: Git, tar, Node.js 22 or newer, and npm. From this tap, run:
+
+```sh
+node scripts/prepare-release.mjs /repos/src/heroku-cli 1
+```
+
+The final argument is the tap revision. The script builds committed `HEAD` in a
+temporary directory, leaves the CLI checkout alone, and writes the formula plus
+an archive, checksum, metadata, and notes under `releases/vVERSION-REVISION/`.
+The `releases/` directory is ignored by Git. The script refuses to overwrite an
+existing local release directory.
+
+Edit `scripts/heroku.rb.template` to change the formula, commit the template,
+and dispatch a release to regenerate `Formula/heroku.rb` automatically.
 
 ## Validation
 
 ```sh
 node --check scripts/prepare-release.mjs
+node --test scripts/release-plan.test.mjs
+actionlint .github/workflows/release.yml
 brew style Formula/heroku.rb
-brew audit --strict dentarg/tap/heroku
-brew test dentarg/tap/heroku
+node scripts/test-formula.mjs v11.11.0-1
 ```
 
 The formula test checks the version, command discovery, and preservation of an
-existing Git configuration with the opt-out enabled. Auditing and testing the
-installed formula require the tap and release to be available locally or on
-GitHub.
+existing Git configuration with the opt-out enabled. The test script installs
+from the local archive before its public URL exists, runs the Homebrew checks,
+then restores the formula and uninstalls the test copy. Run it in an environment
+without an existing Heroku installation. Homebrew and the local release archive
+are required; publishing to GitHub is not.
 
 Formula layout and npm installation follow Homebrew's
 [tap documentation](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap) and
