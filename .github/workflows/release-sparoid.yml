@@ -1,0 +1,117 @@
+name: Release sparoid
+
+on:
+  schedule:
+    - cron: '47 4 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag in dentarg/sparoid.rb (empty for the latest)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-sparoid
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.formula.outputs.version }}
+      changed: ${{ steps.formula.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Test formula rendering
+        run: node --test scripts/sparoid-formula.test.mjs
+      - name: Render formula for the release
+        id: formula
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: node scripts/prepare-sparoid.mjs ${TAG:+"$TAG"}
+      - name: Upload formula
+        if: steps.formula.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sparoid-formula
+          path: Formula/sparoid.rb
+          if-no-files-found: error
+
+  test:
+    needs:
+      - build
+    if: needs.build.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
+          - macos-15-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sparoid-formula
+          path: Formula
+      - name: Install and test formula
+        run: node scripts/brew-test.mjs sparoid
+
+  publish:
+    needs:
+      - build
+      - test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - name: Ensure tap has not changed during testing
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo 'The tap changed during this run; dispatch a new release.' >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sparoid-formula
+          path: Formula
+      - name: Publish formula
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/sparoid.rb
+          cat > "$RUNNER_TEMP/commit-message" <<EOF
+          chore: release sparoid ${VERSION}
+
+          Point the formula at the executables of dentarg/sparoid.rb's
+          v${VERSION} release, tested with Homebrew on macOS and Linux.
+          EOF
+          git commit -F "$RUNNER_TEMP/commit-message"
+          git push origin HEAD:main
+          echo "Published sparoid $VERSION" >> "$GITHUB_STEP_SUMMARY"
