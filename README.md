@@ -1,5 +1,10 @@
 # dentarg's Homebrew tap
 
+| Formula | What |
+|---|---|
+| `heroku` | the Heroku CLI with dentarg's local fixes (this README up to [Spinel](#spinel)) |
+| `spinel` | [Spinel](https://github.com/matz/spinel), the Ruby AOT compiler, a daily snapshot of `master` |
+
 Heroku CLI builds from the `local-fixes` branch of
 [dentarg/heroku-cli](https://github.com/dentarg/heroku-cli), rebased on upstream
 `main`. Each release contains a committed snapshot, compiled JavaScript, and
@@ -151,3 +156,49 @@ are required; publishing to GitHub is not.
 Formula layout and npm installation follow Homebrew's
 [tap documentation](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap) and
 [Node.js formula guidance](https://docs.brew.sh/Language-Specific-Formulae#nodejs).
+
+## Spinel
+
+```sh
+brew install dentarg/tap/spinel
+```
+
+Spinel has dated releases (`2026.09.12`) but moves fast, so this formula builds
+a snapshot of `master` from source. Its version is Spinel's own name for the
+build with the commit count after a `-`: `2026.09.12-6411` is what
+`spinel --version` calls `2026.09.12+6411`. It depends on `openssl@3`, and
+`spinel` needs a C compiler at run time (Xcode's command line tools on macOS).
+
+**Release Spinel** runs daily and can be dispatched with a `source_ref` in
+matz/spinel:
+
+```sh
+gh workflow run release-spinel.yml --repo dentarg/homebrew-tap --ref main \
+  -f source_ref=master
+```
+
+1. `scripts/prepare-spinel.mjs` names the snapshot. A run stops when the tag
+   `spinel-VERSION` or its release exists, so an unchanged `master` publishes
+   nothing.
+2. It runs `make dist` in the checkout (the tree plus the vendored parsers, so
+   Homebrew builds without network access) and renders `Formula/spinel.rb`
+   from `scripts/spinel.rb.template`.
+3. `scripts/brew-test.mjs` builds that archive with Homebrew on macOS and
+   Linux, then runs the formula's test (it compiles a program using
+   `require "openssl"` and runs it), a strict audit and the style checks.
+4. The publishing job commits the formula, pushes the tag, creates the release
+   with the archive, and then pushes `main`, as for Heroku.
+
+Locally, from a clean matz/spinel checkout:
+
+```sh
+node scripts/prepare-spinel.mjs /path/to/spinel
+node scripts/brew-test.mjs spinel releases/spinel-VERSION/spinel-VERSION.tar.xz
+```
+
+Validate the scripts with:
+
+```sh
+node --test scripts/spinel-version.test.mjs
+actionlint .github/workflows/release-spinel.yml
+```
