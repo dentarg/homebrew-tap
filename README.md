@@ -4,6 +4,7 @@
 |---|---|
 | `heroku` | the Heroku CLI with dentarg's local fixes (this README up to [Spinel](#spinel)) |
 | `spinel` | [Spinel](https://github.com/matz/spinel), the Ruby AOT compiler, a daily snapshot of `master` |
+| `sparoid` | the [sparoid.rb](https://github.com/dentarg/sparoid.rb) client compiled with Spinel, no Ruby needed |
 
 Heroku CLI builds from the `local-fixes` branch of
 [dentarg/heroku-cli](https://github.com/dentarg/heroku-cli), rebased on upstream
@@ -196,9 +197,35 @@ node scripts/prepare-spinel.mjs /path/to/spinel
 node scripts/brew-test.mjs spinel releases/spinel-VERSION/spinel-VERSION.tar.xz
 ```
 
+## sparoid
+
+```sh
+brew install dentarg/tap/sparoid
+```
+
+dentarg/sparoid.rb's `Binaries` workflow compiles sparoid with Spinel and
+attaches `sparoid-VERSION-OS-ARCH.tar.gz` and `SHA256SUMS` to the GitHub release
+of each `vX.Y.Z` tag: Linux (statically linked) and macOS, each for x86_64 and
+arm64. The formula installs the executable for the machine; it has no
+dependencies.
+
+**Release sparoid** runs daily and can be dispatched with a `tag` (empty for
+the latest release):
+
+```sh
+gh workflow run release-sparoid.yml --repo dentarg/homebrew-tap --ref main \
+  -f tag=v2.2.1
+```
+
+`scripts/prepare-sparoid.mjs` renders `Formula/sparoid.rb` from
+`scripts/sparoid.rb.template` and the release's `SHA256SUMS`. When it changed,
+the formula is installed and tested on macOS and Linux for both architectures,
+then committed to `main`. The executables stay on sparoid.rb's release; the tap
+publishes no release of its own.
+
 Validate the scripts with:
 
 ```sh
-node --test scripts/spinel-version.test.mjs
-actionlint .github/workflows/release-spinel.yml
+node --test scripts/*.test.mjs
+actionlint .github/workflows/*.yml
 ```
