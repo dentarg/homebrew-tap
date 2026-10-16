@@ -8,6 +8,9 @@ class Spinel < Formula
   license "MIT"
 
   depends_on "pkgconf" => :build
+  # make generates lib/spinel_rt_responds_generated.h with a Ruby script
+  # that requires Prism, which macOS's Ruby 2.6 lacks
+  depends_on "ruby" => :build
   depends_on "openssl@3"
 
   uses_from_macos "libffi"
