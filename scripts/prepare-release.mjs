@@ -7,6 +7,8 @@ import {tmpdir} from 'node:os'
 import {dirname, join, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 
+import {validateSource} from './heroku-source.mjs'
+
 const tapRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 function run(command, args, cwd, capture = false) {
@@ -36,6 +38,13 @@ function prepareRelease() {
     throw new Error('Expected a Heroku CLI checkout with a stable x.y.z version.')
   }
 
+  let sourceRelease
+  if (process.env.HEROKU_SOURCE_METADATA) {
+    sourceRelease = JSON.parse(readFileSync(process.env.HEROKU_SOURCE_METADATA, 'utf8'))
+    validateSource(sourceRelease, sourceRelease.tag, commit)
+    if (sourceRelease.version !== version) throw new Error('Source release version does not match package.json')
+  }
+
   const tag = `v${version}-${revision}`
   const releaseDirectory = join(tapRoot, 'releases', tag)
   if (existsSync(releaseDirectory)) {
@@ -57,7 +66,7 @@ function prepareRelease() {
     const [packed] = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json'], buildDirectory, true))
     const archive = join(buildDirectory, packed.filename)
     const sha256 = createHash('sha256').update(readFileSync(archive)).digest('hex')
-    const replacements = {COMMIT: commit, REVISION: revision, SHA256: sha256, TAG: tag, VERSION: version}
+    const replacements = {COMMIT: commit, REVISION: revision, SHA256: sha256, SOURCE_TAG: sourceRelease?.tag ?? 'local-build', TAG: tag, VERSION: version}
     const template = readFileSync(join(tapRoot, 'scripts', 'heroku.rb.template'), 'utf8')
     const formula = template.replace(/__(\w+)__/g, (_, key) => {
       if (!(key in replacements)) throw new Error(`Unknown template field: ${key}`)
@@ -70,6 +79,7 @@ function prepareRelease() {
     writeFileSync(join(releaseDirectory, 'release.json'), `${JSON.stringify({
       source: 'https://github.com/dentarg/heroku-cli',
       commit,
+      ...(sourceRelease ? {source_tag: sourceRelease.tag, upstream: sourceRelease.upstream} : {}),
       version,
       revision: Number(revision),
       tag,

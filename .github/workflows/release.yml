@@ -1,13 +1,20 @@
 name: Release Heroku
 
 on:
+  schedule:
+    - cron: '41 5 * * *'
   workflow_dispatch:
     inputs:
-      source_ref:
-        description: Branch, tag, or commit in dentarg/heroku-cli
-        required: true
-        default: local-fixes
+      source_tag:
+        description: Published immutable fork source tag (empty for latest)
+        required: false
+        default: ''
         type: string
+      rebuild:
+        description: Publish a new packaging revision for an already packaged source
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -18,38 +25,52 @@ concurrency:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
+    if: github.repository == 'dentarg/homebrew-tap' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
+      changed: ${{ steps.source.outputs.changed }}
     steps:
       - name: Check out tap
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check out CLI
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: dentarg/heroku-cli
-          ref: ${{ inputs.source_ref }}
-          path: cli
-          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           package-manager-cache: false
-      - name: Test release numbering
-        run: node --test scripts/release-plan.test.mjs
+      - name: Test release selection and numbering
+        run: node --test scripts/heroku-source.test.mjs scripts/release-plan.test.mjs
+      - name: Find an immutable source release
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          REBUILD: ${{ inputs.rebuild == true && 'true' || 'false' }}
+        run: node scripts/heroku-source.mjs "$SOURCE_TAG"
+      - name: Check out released CLI commit
+        if: steps.source.outputs.changed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dentarg/heroku-cli
+          ref: ${{ steps.source.outputs.commit }}
+          path: cli
+          persist-credentials: false
       - name: Choose next revision
+        if: steps.source.outputs.changed == 'true'
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/release-plan.mjs cli
       - name: Build release
+        if: steps.source.outputs.changed == 'true'
         env:
           REVISION: ${{ steps.plan.outputs.revision }}
+          HEROKU_SOURCE_METADATA: ${{ github.workspace }}/heroku-source.json
         run: node scripts/prepare-release.mjs cli "$REVISION"
       - name: Upload release candidate
+        if: steps.source.outputs.changed == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: heroku-release
@@ -61,6 +82,7 @@ jobs:
   test:
     needs:
       - build
+    if: needs.build.outputs.changed == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +90,7 @@ jobs:
           - ubuntu-latest
           - macos-latest
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,13 +112,16 @@ jobs:
     needs:
       - build
       - test
+    if: needs.build.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+          persist-credentials: false
       - name: Ensure tap has not changed during testing
         run: |
           if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
@@ -110,6 +136,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
         run: |
+          gh auth setup-git
           release_dir="releases/$RELEASE_TAG"
           version=$(jq -r .version "$release_dir/release.json")
           revision=$(jq -r .revision "$release_dir/release.json")
